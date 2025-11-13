@@ -3,188 +3,282 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Конвертер Silicate ↔ GDH</title>
+    <title>Конвертер файлов SCL ↔ RE</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Стили для кнопок и полей */
         body { font-family: 'Inter', sans-serif; background-color: #f7f9fb; }
-        .btn-conversion { transition: all 0.2s; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
-        .btn-conversion:hover { box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15); transform: translateY(-1px); }
-        .btn-silicate { background-color: #3b82f6; /* Blue 500 */ }
-        .btn-gdh { background-color: #10b981; /* Emerald 500 */ }
-        textarea { resize: vertical; }
+        .card { box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1); }
+        .btn { transition: all 0.2s; }
+        .btn-upload { background-color: #3b82f6; }
+        .btn-download { background-color: #10b981; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        textarea { resize: none; }
     </style>
     <script>
-        // Четко определенные ключи, используемые в обоих форматах
-        const FIELD_KEYS = ["ID", "Name", "Value_SiO2", "Density"];
-        const GDH_SEPARATOR = ';';
+        const FIELD_KEYS = ["ID", "Parameter", "Value", "Unit"];
+        const RE_HEADER_PREFIX = "# SOURCE_FILE:";
 
-        // --- Вспомогательные функции ---
+        let uploadedFile = null;
 
-        function showMessage(message, type) {
+        /**
+         * Отображает сообщение (успех или ошибка) в UI.
+         */
+        function showMessage(message, type = 'info') {
             const messageBox = document.getElementById('messageBox');
             messageBox.textContent = message;
-            messageBox.classList.remove('hidden', 'bg-red-100', 'bg-green-100', 'text-red-700', 'text-green-700');
+            messageBox.classList.remove('hidden', 'bg-red-100', 'bg-green-100', 'bg-yellow-100', 'text-red-700', 'text-green-700', 'text-yellow-700');
             
             if (type === 'success') {
                 messageBox.className = 'p-3 mb-4 rounded-lg border-l-4 font-medium bg-green-100 text-green-700 border-green-400';
             } else if (type === 'error') {
                 messageBox.className = 'p-3 mb-4 rounded-lg border-l-4 font-medium bg-red-100 text-red-700 border-red-400';
+            } else { // info
+                 messageBox.className = 'p-3 mb-4 rounded-lg border-l-4 font-medium bg-yellow-100 text-yellow-700 border-yellow-400';
             }
             setTimeout(() => {
                 messageBox.classList.add('hidden');
-            }, 5000);
+            }, 7000);
+        }
+
+        /**
+         * Вызывается при выборе файла. Считывает его содержимое.
+         */
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            const extension = file.name.split('.').pop().toLowerCase();
+            if (extension !== 'scl' && extension !== 're') {
+                showMessage(`Неподдерживаемый формат файла: .${extension}. Пожалуйста, загрузите .scl или .re`, 'error');
+                document.getElementById('fileInput').value = '';
+                return;
+            }
+
+            uploadedFile = file;
+            document.getElementById('fileNameDisplay').textContent = `Выбран файл: ${file.name}`;
+            document.getElementById('downloadButton').classList.add('hidden');
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('inputArea').value = e.target.result;
+                showMessage(`Файл ${file.name} успешно загружен.`, 'success');
+                document.getElementById('convertButton').classList.remove('hidden');
+            };
+            reader.onerror = () => {
+                showMessage('Ошибка при чтении файла.', 'error');
+                uploadedFile = null;
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Основная функция для запуска соответствующей конвертации.
+         */
+        function startConversion() {
+            if (!uploadedFile) {
+                showMessage('Пожалуйста, сначала загрузите файл .scl или .re', 'error');
+                return;
+            }
+
+            const inputFileExtension = uploadedFile.name.split('.').pop().toLowerCase();
+            const inputContent = document.getElementById('inputArea').value;
+            let outputContent = '';
+            let outputFileName = '';
+            let conversionSuccess = false;
+
+            document.getElementById('outputArea').value = 'Конвертация...';
+
+            if (inputFileExtension === 'scl') {
+                const result = convertSclToRe(inputContent, uploadedFile.name);
+                if (result.success) {
+                    outputContent = result.data;
+                    outputFileName = uploadedFile.name.replace(/\.scl$/i, '.re');
+                    conversionSuccess = true;
+                }
+            } else if (inputFileExtension === 're') {
+                const result = convertReToScl(inputContent, uploadedFile.name);
+                if (result.success) {
+                    outputContent = result.data;
+                    outputFileName = uploadedFile.name.replace(/\.re$/i, '.scl');
+                    conversionSuccess = true;
+                }
+            }
+
+            document.getElementById('outputArea').value = outputContent;
+
+            if (conversionSuccess) {
+                document.getElementById('downloadButton').classList.remove('hidden');
+                document.getElementById('downloadButton').dataset.filename = outputFileName;
+                showMessage(`Конвертация успешно выполнена! Получен файл ${outputFileName}.`, 'success');
+            } else {
+                 document.getElementById('downloadButton').classList.add('hidden');
+            }
         }
         
         /**
-         * Преобразует Silicate JSON в массив объектов.
+         * Логика: SCL (JSON) -> RE (CSV с заголовком)
          */
-        function parseSilicateToObjects(silicateText) {
+        function convertSclToRe(sclContent, originalFileName) {
             try {
-                const data = JSON.parse(silicateText);
-                if (!Array.isArray(data)) {
-                    throw new Error("Ожидался массив записей.");
-                }
-                return data;
+                const records = JSON.parse(sclContent);
+                if (!Array.isArray(records)) throw new Error("Ожидался массив записей.");
+
+                // 1. Формирование строки заголовка RE
+                const reHeader = `${RE_HEADER_PREFIX} ${originalFileName}`;
+                const columnHeader = FIELD_KEYS.join(',');
+
+                // 2. Формирование строк данных
+                const dataLines = records.map(record => {
+                    return FIELD_KEYS.map(key => {
+                        let value = record[key];
+                        // Простая защита от CSV инъекций и форматирование строк в кавычки
+                        if (typeof value === 'string') {
+                            return `"${value.replace(/"/g, '""')}"`;
+                        }
+                        return value;
+                    }).join(',');
+                });
+
+                const reContent = [reHeader, columnHeader, ...dataLines].join('\n');
+                return { success: true, data: reContent };
+
             } catch (e) {
-                showMessage(`Ошибка парсинга Silicate JSON: ${e.message}`, 'error');
-                return null;
+                showMessage(`Ошибка SCL → RE: Неверный формат JSON. ${e.message}`, 'error');
+                return { success: false, data: `Ошибка: ${e.message}` };
             }
         }
 
         /**
-         * Преобразует GDH текст в массив объектов.
+         * Логика: RE (CSV с заголовком) -> SCL (JSON)
          */
-        function parseGdhToObjects(gdhText) {
-            const lines = gdhText.trim().split('\n').filter(line => line.trim() !== '');
-            const records = [];
+        function convertReToScl(reContent, originalFileName) {
+            const lines = reContent.trim().split('\n');
+            if (lines.length < 2) {
+                showMessage('Ошибка RE → SCL: Файл слишком короткий или пустой.', 'error');
+                return { success: false, data: 'Ошибка: Файл RE слишком короткий.' };
+            }
 
+            // 1. Проверка и удаление заголовка RE
+            if (!lines[0].startsWith(RE_HEADER_PREFIX)) {
+                 showMessage('Ошибка RE → SCL: Не найден обязательный заголовок RE формата.', 'error');
+                 return { success: false, data: 'Ошибка: Отсутствует заголовок RE.' };
+            }
+            
+            // 2. Получение заголовка столбцов (вторая строка)
+            const columnHeaderLine = lines[1].trim();
+            const columns = columnHeaderLine.split(',').map(c => c.trim());
+            
+            if (columns.join(',') !== FIELD_KEYS.join(',')) {
+                showMessage('Ошибка RE → SCL: Заголовки столбцов не соответствуют ожидаемым (ID, Parameter, Value, Unit).', 'error');
+                return { success: false, data: 'Ошибка: Неверные заголовки столбцов.' };
+            }
+            
+            const records = [];
+            
+            // 3. Парсинг строк данных (начиная с третьей строки)
             try {
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    const values = line.split(GDH_SEPARATOR);
+                 for (let i = 2; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+
+                    // Простой парсинг CSV
+                    const values = line.split(','); 
                     if (values.length !== FIELD_KEYS.length) {
-                        throw new Error(`Ошибка в строке ${i + 1}: '${line}'. Ожидалось ${FIELD_KEYS.length} полей, получено ${values.length}.`);
+                        throw new Error(`Неверное количество столбцов в строке ${i + 1}.`);
                     }
 
                     const record = {};
-                    record[FIELD_KEYS[0]] = parseInt(values[0].trim()); // ID (число)
-                    record[FIELD_KEYS[1]] = values[1].trim();          // Name (строка)
-                    record[FIELD_KEYS[2]] = parseFloat(values[2].trim()); // Value_SiO2 (число)
-                    record[FIELD_KEYS[3]] = parseFloat(values[3].trim()); // Density (число)
+                    record[FIELD_KEYS[0]] = parseInt(values[0]);
+                    record[FIELD_KEYS[1]] = values[1].replace(/"/g, ''); // Удаляем кавычки
+                    record[FIELD_KEYS[2]] = parseFloat(values[2]);
+                    record[FIELD_KEYS[3]] = values[3].replace(/"/g, '');
                     
-                    if (isNaN(record.ID) || isNaN(record.Value_SiO2) || isNaN(record.Density)) {
-                         throw new Error(`Ошибка преобразования числовых данных в строке ${i + 1}: '${line}'.`);
-                    }
-
                     records.push(record);
                 }
-                return records;
             } catch (e) {
-                showMessage(`Ошибка парсинга GDH: ${e.message}`, 'error');
-                return null;
+                 showMessage(`Ошибка парсинга RE → SCL: ${e.message}`, 'error');
+                 return { success: false, data: `Ошибка парсинга строки: ${e.message}` };
             }
-        }
-        
-        // --- Основные функции конвертации ---
 
-        function convertSilicateToGdh() {
-            const records = parseSilicateToObjects(document.getElementById('inputArea').value);
-            
-            if (!records) return;
 
-            // Преобразование объектов в GDH формат (строки с разделителем ';', без заголовка)
-            const gdhLines = records.map(record => {
-                // Строгий порядок по FIELD_KEYS
-                return FIELD_KEYS.map(key => record[key]).join(GDH_SEPARATOR);
-            });
-            
-            document.getElementById('outputArea').value = gdhLines.join('\n');
-            showMessage('Конвертация Silicate → GDH успешно выполнена!', 'success');
-        }
-
-        function convertGdhToSilicate() {
-            const records = parseGdhToObjects(document.getElementById('inputArea').value);
-            
-            if (!records) return;
-
-            // Преобразование объектов обратно в отформатированный JSON
-            document.getElementById('outputArea').value = JSON.stringify(records, null, 2);
-            showMessage('Конвертация GDH → Silicate успешно выполнена!', 'success');
+            // 4. Форматирование в JSON (SCL)
+            const sclContent = JSON.stringify(records, null, 2);
+            return { success: true, data: sclContent };
         }
 
         /**
-         * Вставляет примеры данных.
+         * Создает Blob из содержимого и предлагает скачать файл.
          */
-        function insertExample(format) {
-            let exampleText = '';
-            if (format === 'silicate') {
-                exampleText = JSON.stringify([
-                    {"ID": 101, "Name": "Quartz Sample", "Value_SiO2": 99.5, "Density": 2.65},
-                    {"ID": 202, "Name": "Feldspar Rock", "Value_SiO2": 65.1, "Density": 2.76},
-                    {"ID": 303, "Name": "Obsidian Glass", "Value_SiO2": 78.3, "Density": 2.40}
-                ], null, 2);
-            } else if (format === 'gdh') {
-                exampleText = "101;Quartz Sample;99.5;2.65\n202;Feldspar Rock;65.1;2.76\n303;Obsidian Glass;78.3;2.40";
+        function downloadFile() {
+            const outputContent = document.getElementById('outputArea').value;
+            const outputFileName = document.getElementById('downloadButton').dataset.filename;
+            
+            if (!outputContent || !outputFileName) {
+                showMessage('Нет данных для скачивания.', 'error');
+                return;
             }
-            document.getElementById('inputArea').value = exampleText;
-            document.getElementById('outputArea').value = '';
-            showMessage(`Вставлен пример для формата ${format.toUpperCase()}.`, 'success');
+
+            const mimeType = outputFileName.endsWith('.scl') ? 'application/json' : 'text/csv';
+            const blob = new Blob([outputContent], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = outputFileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showMessage(`Файл ${outputFileName} успешно скачан.`, 'success');
         }
-
-        // Вставка примера Silicate по умолчанию при загрузке
-        window.onload = () => {
-             insertExample('silicate');
-        };
-
     </script>
 </head>
 <body class="p-4 sm:p-8">
 
-    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-2xl p-6 md:p-10">
-        <h1 class="text-3xl font-extrabold text-gray-800 mb-6 border-b pb-2">Универсальный Конвертер Silicate ↔ GDH</h1>
+    <div class="max-w-4xl mx-auto bg-white rounded-xl card p-6 md:p-10">
+        <h1 class="text-3xl font-extrabold text-gray-800 mb-6 border-b pb-2 text-center">Конвертер Файлов SCL ↔ RE</h1>
         
-        <p class="text-sm text-gray-600 mb-6">
-            <span class="font-semibold">Структура:</span> Используются 4 поля: **ID, Name, Value_SiO2, Density**.
-            <ul class="list-disc list-inside mt-2 ml-4 space-y-1">
-                <li><strong class="text-blue-600">Silicate:</strong> Стандартный JSON массив.</li>
-                <li><strong class="text-emerald-600">GDH:</strong> Текст, разделенный **точкой с запятой (`;`)**, без заголовка.</li>
-            </ul>
+        <p class="text-sm text-gray-600 mb-6 text-center">
+            Загрузите файл **.scl** (JSON-формат) или **.re** (текст, разделенный запятыми) для двустороннего преобразования.
         </p>
 
         <div id="messageBox" class="hidden p-3 mb-4 rounded-lg border-l-4 font-medium" role="alert"></div>
 
-        <div class="flex flex-wrap gap-3 mb-6">
-            <span class="font-medium text-gray-700">Вставить пример:</span>
-            <button onclick="insertExample('silicate')" class="bg-blue-100 text-blue-800 hover:bg-blue-200 text-sm font-medium py-1 px-3 rounded-full transition">
-                Пример Silicate (JSON)
-            </button>
-            <button onclick="insertExample('gdh')" class="bg-emerald-100 text-emerald-800 hover:bg-emerald-200 text-sm font-medium py-1 px-3 rounded-full transition">
-                Пример GDH (текст)
-            </button>
+        <div class="mb-8 p-4 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50">
+            <label for="fileInput" class="block text-lg font-bold text-gray-800 mb-3 cursor-pointer">
+                1. Выберите файл (.scl или .re):
+            </label>
+            <input type="file" id="fileInput" onchange="handleFileSelect(event)" accept=".scl,.re" class="hidden">
+            
+            <label for="fileInput" class="w-full inline-block text-center py-3 px-4 rounded-lg text-white font-semibold cursor-pointer btn-upload hover:bg-blue-700">
+                <span id="fileNameDisplay">Нажмите, чтобы выбрать файл</span>
+            </label>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <div>
-                <label for="inputArea" class="block text-lg font-bold text-gray-800 mb-2">Входные Данные</label>
-                <textarea id="inputArea" rows="15" placeholder="Вставьте сюда исходные данные..."
-                          class="w-full p-4 border-2 border-gray-300 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 text-sm transition"></textarea>
+                <label for="inputArea" class="block text-lg font-bold text-gray-800 mb-2">Содержимое Входного Файла</label>
+                <textarea id="inputArea" rows="15" readonly placeholder="Здесь появится содержимое загруженного файла..."
+                          class="w-full p-4 border-2 border-gray-300 bg-gray-100 rounded-lg text-sm text-gray-700"></textarea>
             </div>
             <div>
-                <label for="outputArea" class="block text-lg font-bold text-gray-800 mb-2">Выходные Данные</label>
+                <label for="outputArea" class="block text-lg font-bold text-gray-800 mb-2">Содержимое Выходного Файла</label>
                 <textarea id="outputArea" rows="15" readonly placeholder="Результат конвертации появится здесь..."
-                          class="w-full p-4 border-2 border-gray-300 bg-gray-50 rounded-lg text-sm text-gray-700"></textarea>
+                          class="w-full p-4 border-2 border-gray-300 bg-gray-100 rounded-lg text-sm text-gray-700"></textarea>
             </div>
         </div>
 
         <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
             
-            <button onclick="convertSilicateToGdh()" class="btn-conversion btn-silicate text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300">
-                Silicate (JSON) <span class="font-mono">→</span> GDH (текст)
+            <button id="convertButton" onclick="startConversion()" class="btn btn-upload text-white font-semibold py-3 px-6 rounded-xl focus:outline-none focus:ring-4 focus:ring-blue-300 hidden">
+                Выполнить Конвертацию
             </button>
             
-            <button onclick="convertGdhToSilicate()" class="btn-conversion btn-gdh text-white font-semibold py-3 px-6 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-300">
-                GDH (текст) <span class="font-mono">→</span> Silicate (JSON)
+            <button id="downloadButton" onclick="downloadFile()" data-filename="" class="btn btn-download text-white font-semibold py-3 px-6 rounded-xl focus:outline-none focus:ring-4 focus:ring-emerald-300 hidden">
+                Скачать Сконвертированный Файл
             </button>
 
         </div>
