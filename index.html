@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конвертер Silicate ↔ GDH</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Стили для кнопок и полей */
+        body { font-family: 'Inter', sans-serif; background-color: #f7f9fb; }
+        .btn-conversion { transition: all 0.2s; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+        .btn-conversion:hover { box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15); transform: translateY(-1px); }
+        .btn-silicate { background-color: #3b82f6; /* Blue 500 */ }
+        .btn-gdh { background-color: #10b981; /* Emerald 500 */ }
+        textarea { resize: vertical; }
+    </style>
+    <script>
+        // Четко определенные ключи, используемые в обоих форматах
+        const FIELD_KEYS = ["ID", "Name", "Value_SiO2", "Density"];
+        const GDH_SEPARATOR = ';';
+
+        // --- Вспомогательные функции ---
+
+        function showMessage(message, type) {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'bg-red-100', 'bg-green-100', 'text-red-700', 'text-green-700');
+            
+            if (type === 'success') {
+                messageBox.className = 'p-3 mb-4 rounded-lg border-l-4 font-medium bg-green-100 text-green-700 border-green-400';
+            } else if (type === 'error') {
+                messageBox.className = 'p-3 mb-4 rounded-lg border-l-4 font-medium bg-red-100 text-red-700 border-red-400';
+            }
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 5000);
+        }
+        
+        /**
+         * Преобразует Silicate JSON в массив объектов.
+         */
+        function parseSilicateToObjects(silicateText) {
+            try {
+                const data = JSON.parse(silicateText);
+                if (!Array.isArray(data)) {
+                    throw new Error("Ожидался массив записей.");
+                }
+                return data;
+            } catch (e) {
+                showMessage(`Ошибка парсинга Silicate JSON: ${e.message}`, 'error');
+                return null;
+            }
+        }
+
+        /**
+         * Преобразует GDH текст в массив объектов.
+         */
+        function parseGdhToObjects(gdhText) {
+            const lines = gdhText.trim().split('\n').filter(line => line.trim() !== '');
+            const records = [];
+
+            try {
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const values = line.split(GDH_SEPARATOR);
+                    if (values.length !== FIELD_KEYS.length) {
+                        throw new Error(`Ошибка в строке ${i + 1}: '${line}'. Ожидалось ${FIELD_KEYS.length} полей, получено ${values.length}.`);
+                    }
+
+                    const record = {};
+                    record[FIELD_KEYS[0]] = parseInt(values[0].trim()); // ID (число)
+                    record[FIELD_KEYS[1]] = values[1].trim();          // Name (строка)
+                    record[FIELD_KEYS[2]] = parseFloat(values[2].trim()); // Value_SiO2 (число)
+                    record[FIELD_KEYS[3]] = parseFloat(values[3].trim()); // Density (число)
+                    
+                    if (isNaN(record.ID) || isNaN(record.Value_SiO2) || isNaN(record.Density)) {
+                         throw new Error(`Ошибка преобразования числовых данных в строке ${i + 1}: '${line}'.`);
+                    }
+
+                    records.push(record);
+                }
+                return records;
+            } catch (e) {
+                showMessage(`Ошибка парсинга GDH: ${e.message}`, 'error');
+                return null;
+            }
+        }
+        
+        // --- Основные функции конвертации ---
+
+        function convertSilicateToGdh() {
+            const records = parseSilicateToObjects(document.getElementById('inputArea').value);
+            
+            if (!records) return;
+
+            // Преобразование объектов в GDH формат (строки с разделителем ';', без заголовка)
+            const gdhLines = records.map(record => {
+                // Строгий порядок по FIELD_KEYS
+                return FIELD_KEYS.map(key => record[key]).join(GDH_SEPARATOR);
+            });
+            
+            document.getElementById('outputArea').value = gdhLines.join('\n');
+            showMessage('Конвертация Silicate → GDH успешно выполнена!', 'success');
+        }
+
+        function convertGdhToSilicate() {
+            const records = parseGdhToObjects(document.getElementById('inputArea').value);
+            
+            if (!records) return;
+
+            // Преобразование объектов обратно в отформатированный JSON
+            document.getElementById('outputArea').value = JSON.stringify(records, null, 2);
+            showMessage('Конвертация GDH → Silicate успешно выполнена!', 'success');
+        }
+
+        /**
+         * Вставляет примеры данных.
+         */
+        function insertExample(format) {
+            let exampleText = '';
+            if (format === 'silicate') {
+                exampleText = JSON.stringify([
+                    {"ID": 101, "Name": "Quartz Sample", "Value_SiO2": 99.5, "Density": 2.65},
+                    {"ID": 202, "Name": "Feldspar Rock", "Value_SiO2": 65.1, "Density": 2.76},
+                    {"ID": 303, "Name": "Obsidian Glass", "Value_SiO2": 78.3, "Density": 2.40}
+                ], null, 2);
+            } else if (format === 'gdh') {
+                exampleText = "101;Quartz Sample;99.5;2.65\n202;Feldspar Rock;65.1;2.76\n303;Obsidian Glass;78.3;2.40";
+            }
+            document.getElementById('inputArea').value = exampleText;
+            document.getElementById('outputArea').value = '';
+            showMessage(`Вставлен пример для формата ${format.toUpperCase()}.`, 'success');
+        }
+
+        // Вставка примера Silicate по умолчанию при загрузке
+        window.onload = () => {
+             insertExample('silicate');
+        };
+
+    </script>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-2xl p-6 md:p-10">
+        <h1 class="text-3xl font-extrabold text-gray-800 mb-6 border-b pb-2">Универсальный Конвертер Silicate ↔ GDH</h1>
+        
+        <p class="text-sm text-gray-600 mb-6">
+            <span class="font-semibold">Структура:</span> Используются 4 поля: **ID, Name, Value_SiO2, Density**.
+            <ul class="list-disc list-inside mt-2 ml-4 space-y-1">
+                <li><strong class="text-blue-600">Silicate:</strong> Стандартный JSON массив.</li>
+                <li><strong class="text-emerald-600">GDH:</strong> Текст, разделенный **точкой с запятой (`;`)**, без заголовка.</li>
+            </ul>
+        </p>
+
+        <div id="messageBox" class="hidden p-3 mb-4 rounded-lg border-l-4 font-medium" role="alert"></div>
+
+        <div class="flex flex-wrap gap-3 mb-6">
+            <span class="font-medium text-gray-700">Вставить пример:</span>
+            <button onclick="insertExample('silicate')" class="bg-blue-100 text-blue-800 hover:bg-blue-200 text-sm font-medium py-1 px-3 rounded-full transition">
+                Пример Silicate (JSON)
+            </button>
+            <button onclick="insertExample('gdh')" class="bg-emerald-100 text-emerald-800 hover:bg-emerald-200 text-sm font-medium py-1 px-3 rounded-full transition">
+                Пример GDH (текст)
+            </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div>
+                <label for="inputArea" class="block text-lg font-bold text-gray-800 mb-2">Входные Данные</label>
+                <textarea id="inputArea" rows="15" placeholder="Вставьте сюда исходные данные..."
+                          class="w-full p-4 border-2 border-gray-300 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 text-sm transition"></textarea>
+            </div>
+            <div>
+                <label for="outputArea" class="block text-lg font-bold text-gray-800 mb-2">Выходные Данные</label>
+                <textarea id="outputArea" rows="15" readonly placeholder="Результат конвертации появится здесь..."
+                          class="w-full p-4 border-2 border-gray-300 bg-gray-50 rounded-lg text-sm text-gray-700"></textarea>
+            </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+            
+            <button onclick="convertSilicateToGdh()" class="btn-conversion btn-silicate text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300">
+                Silicate (JSON) <span class="font-mono">→</span> GDH (текст)
+            </button>
+            
+            <button onclick="convertGdhToSilicate()" class="btn-conversion btn-gdh text-white font-semibold py-3 px-6 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-300">
+                GDH (текст) <span class="font-mono">→</span> Silicate (JSON)
+            </button>
+
+        </div>
+    </div>
+
+</body>
+</html>
